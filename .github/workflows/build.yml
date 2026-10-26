@@ -1,4 +1,4 @@
-name: ZY V4 Android APK
+name: ZY V4 AutoFix APK
 on:
   workflow_dispatch:
   push:
@@ -37,11 +37,19 @@ jobs:
             echo 'Cannot find Android project' >&2
             exit 1
           fi
+      - name: Fix V4 Java duplicate variable
+        shell: bash
+        run: |
+          f="$PROJECT_DIR/app/src/main/java/com/zycmzc/assistant/CameraActivity.java"
+          test -f "$f"
+          # The original V4 ZIP declared local variable 'bytes' twice.
+          sed -i '/^            int bytes=w\*h\*4;$/d' "$f"
+          test "$(grep -Fc 'int bytes=w*h*4;' "$f")" -eq 1
       - name: Build debug APK with offline AI assets
         run: gradle --project-dir "$PROJECT_DIR" assembleDebug --stacktrace --no-daemon
       - uses: actions/upload-artifact@v4
         with:
-          name: ZY-Assistant-V4-debug-apk
+          name: ZY-Assistant-V4-AutoFix-debug-apk
           path: |
             ZY_Assistant_Android_V3/app/build/outputs/apk/debug/*.apk
             app/build/outputs/apk/debug/*.apk
