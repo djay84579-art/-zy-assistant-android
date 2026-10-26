@@ -1,74 +1,62 @@
-name: ZY V7 Only - Build and Clean Old Versions
-
+name: ZY V8 Offline Local APK
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, master]
     paths:
-      - '.github/workflows/build.yml'
-      - 'ZY_Assistant_Android_V7_Roboflow.zip'
-
+      - '.github/workflows/build_zy_v8_offline.yml'
+      - 'ZY_Assistant_Android_V8_Offline.zip'
 permissions:
-  contents: write
-
+  contents: read
 jobs:
-  build-v7-and-clean:
+  build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+      - uses: android-actions/setup-android@v4
         with:
           packages: ''
-      - name: Install Android SDK packages
+      - name: Install Android SDK
         run: sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
-      - name: Set up Gradle 8.7
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
-      - name: Extract standalone V7 project
+      - name: Extract independent V8 source
         run: |
-          test -f ZY_Assistant_Android_V7_Roboflow.zip
-          unzip -oq ZY_Assistant_Android_V7_Roboflow.zip
-          test -f ZY_Assistant_Android_V7_Roboflow/app/build.gradle
-      - name: Check person detection logic
+          unzip -oq ZY_Assistant_Android_V8_Offline.zip
+          test -f ZY_Assistant_Android_V8_Offline/app/build.gradle
+          ! grep -qr 'roboflowKey' ZY_Assistant_Android_V8_Offline/app/src/main/java || exit 1
+      - name: Get official EfficientDet-Lite0 int8 model (bundle in APK)
         run: |
-          mkdir -p /tmp/zyv7-test
-          javac -d /tmp/zyv7-test \
-            ZY_Assistant_Android_V7_Roboflow/app/src/main/java/com/zycmzc/assistant/RegionEvidence.java \
-            ZY_Assistant_Android_V7_Roboflow/RegionEvidenceTest.java
-          java -cp /tmp/zyv7-test com.zycmzc.assistant.RegionEvidenceTest
-      - name: Build V7 APK
-        run: gradle --project-dir ZY_Assistant_Android_V7_Roboflow :app:assembleDebug --stacktrace --no-daemon
-      - name: Upload V7 APK
-        uses: actions/upload-artifact@v4
+          set -euo pipefail
+          mkdir -p ZY_Assistant_Android_V8_Offline/app/src/main/assets
+          curl --fail --location --retry 5 --retry-delay 3 --connect-timeout 20 --max-time 180 \
+            'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/int8/latest/efficientdet_lite0.tflite' \
+            -o ZY_Assistant_Android_V8_Offline/app/src/main/assets/efficientdet_lite0_int8.tflite
+          python3 - <<'PYMODEL'
+          from pathlib import Path
+          f=Path('ZY_Assistant_Android_V8_Offline/app/src/main/assets/efficientdet_lite0_int8.tflite')
+          data=f.read_bytes()
+          assert len(data)>100_000, 'Model too small'
+          assert data[4:8]==b'TFL3', 'Not a TFLite model'
+          print('Bundled offline detector:',len(data),'bytes')
+          PYMODEL
+      - name: Test temporal person confirmation
+        run: |
+          mkdir -p /tmp/zy-v8-test
+          javac -d /tmp/zy-v8-test \
+            ZY_Assistant_Android_V8_Offline/app/src/main/java/com/zycmzc/assistant/RegionEvidence.java \
+            ZY_Assistant_Android_V8_Offline/RegionEvidenceTest.java
+          java -cp /tmp/zy-v8-test com.zycmzc.assistant.RegionEvidenceTest
+      - name: Build offline APK
+        run: gradle --project-dir ZY_Assistant_Android_V8_Offline :app:assembleDebug --stacktrace --no-daemon
+      - uses: actions/upload-artifact@v4
         with:
-          name: ZY-Assistant-V7-Roboflow-APK
-          path: ZY_Assistant_Android_V7_Roboflow/app/build/outputs/apk/debug/*.apk
+          name: ZY-Assistant-V8-Offline-debug-APK
+          path: ZY_Assistant_Android_V8_Offline/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-      - name: Delete obsolete archives from GitHub
-        if: success() && github.ref == 'refs/heads/main'
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          for file in \
-            ZY_Assistant_Android_V3.zip \
-            ZY_Assistant_Android_V4.zip \
-            ZY_Assistant_Android_V6_Cloud.zip \
-            build_zy_v5_onefile.yml; do
-            if [ -f "$file" ]; then
-              git rm -- "$file"
-            fi
-          done
-          if ! git diff --cached --quiet; then
-            git commit -m 'Remove obsolete versions; keep standalone V7'
-            git push origin HEAD:main
-          else
-            echo 'No old versions remain.'
-          fi
