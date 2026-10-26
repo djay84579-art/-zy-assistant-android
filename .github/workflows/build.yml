@@ -47,8 +47,13 @@ jobs:
           d=(base/'efficientdet_lite0_int8.tflite').read_bytes()
           p=(base/'pose_landmarker_lite.task').read_bytes()
           assert len(d)>100_000 and d[4:8]==b'TFL3', 'Invalid detector model'
-          assert len(p)>100_000 and p[:2]==b'PK', 'Invalid pose model bundle'
-          print('Models validated:',len(d),len(p))
+          # MediaPipe .task is a model bundle; do not assume PK is at byte 0.
+          # Official lite asset is about 5.8 MB; reject truncated/error pages.
+          assert 4_000_000 < len(p) < 15_000_000, 'Pose task model size unexpected'
+          assert not p.lstrip().startswith((b'<', b'{')), 'Pose task response is not a model'
+          import hashlib
+          print('Models validated:', len(d), len(p))
+          print('Pose model SHA256:', hashlib.sha256(p).hexdigest())
           PYMODEL
       - name: Check source and temporal confirmation
         run: |
